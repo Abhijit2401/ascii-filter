@@ -1,0 +1,346 @@
+---
+import '../styles/app.css';
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ASCII Filter | Directional Edge & Dither Engine</title>
+</head>
+<body>
+    <video id="media-video" loop muted playsinline crossorigin="anonymous"></video>
+    <img id="media-image" crossorigin="anonymous" />
+    <canvas id="app-canvas"></canvas>
+
+    <div id="rec-indicator"><span class="dot"></span> RECORDING</div>
+    <div id="tooltip"><span class="tip-title">Info</span><span id="tooltip-body"></span></div>
+
+    <div class="ui-panel" id="ui-panel">
+        <h1>WebGL ASCII Render Pipeline</h1>
+        <p id="status-text">Awaiting media...</p>
+
+        <div class="mode-toggle">
+            <button id="mode-web" class="mode-btn active">Web App</button>
+            <button id="mode-engine" class="mode-btn">Game Engine</button>
+        </div>
+        
+        <label for="media-upload" class="action-btn">[+] Upload Media</label>
+        <input type="file" id="media-upload" accept="image/*, video/*" />
+
+        <div class="button-row">
+            <button id="btn-webcam" class="action-btn small">Webcam</button>
+            <button id="btn-record" class="action-btn small">● Record WebM</button>
+        </div>
+
+        <div class="button-row">
+            <button id="btn-zoom-in" class="action-btn">+</button>
+            <button id="btn-zoom-out" class="action-btn">-</button>
+            <button id="btn-download" class="action-btn" style="flex-grow: 2;">Save Image</button>
+        </div>
+
+        <div class="section-title">Core Shader Settings</div>
+
+        <div class="input-group">
+            <label>
+                <span class="label-text">Brightness Cutoff<span class="info-icon" data-tip="Anything brighter than this gets treated as background and skipped. Handy for cutting out blown-out highlights.">i</span></span>
+                <span class="val" id="val-blackout">1.0</span>
+            </label>
+            <input type="range" id="slider-blackout" min="0.1" max="1.0" step="0.05" value="1.0" />
+        </div>
+        
+        <div class="input-group">
+            <label>
+                <span class="label-text">Vibrancy<span class="info-icon" data-tip="Pushes the contrast curve harder before mapping brightness to characters. Higher values give you punchier, more graphic black/white silhouettes.">i</span></span>
+                <span class="val" id="val-vibrancy">1.0</span>
+            </label>
+            <input type="range" id="slider-vibrancy" min="0" max="4" step="0.1" value="1.0" />
+        </div>
+
+        <div class="input-group">
+            <label>
+                <span class="label-text">Eye Saver (Clamp Brightness)<span class="info-icon" data-tip="Caps how bright whites can get so the render doesn't blast your eyes during a long dark-room session.">i</span></span>
+                <input type="checkbox" id="toggle-eyesaver" />
+            </label>
+        </div>
+
+        <div class="input-group">
+            <label>
+                <span class="label-text">Grid Density<span class="info-icon" data-tip="How many character columns fit across the screen. Rows scale automatically off the Glyph Aspect value below, so cells never stretch.">i</span></span>
+                <span class="val" id="val-density">120</span>
+            </label>
+            <input type="range" id="slider-density" min="20" max="200" value="120" />
+        </div>
+
+        <div class="input-group">
+            <label>
+                <span class="label-text">Color Steps<span class="info-icon" data-tip="Posterizes color into N bands per channel, the classic retro-terminal look. Doesn't do anything while Palette Lock is on. Pairs well with Ordered Dithering.">i</span></span>
+                <span class="val" id="val-steps">4</span>
+            </label>
+            <input type="range" id="slider-steps" min="2" max="32" value="4" />
+        </div>
+
+        <div class="input-group">
+            <label>
+                <span class="label-text">Saturation<span class="info-icon" data-tip="0 is pure grayscale, higher values mix in more of the original color.">i</span></span>
+                <span class="val" id="val-sat">1.0</span>
+            </label>
+            <input type="range" id="slider-sat" min="0" max="3" step="0.1" value="1.0" />
+        </div>
+
+        <div class="section-title accent">Glyph Atlas Engine</div>
+
+        <div class="input-group text-input">
+            <label>
+                <span class="label-text">Character Ramp<span class="info-icon" data-tip="The characters used, ordered dark to light. Each cell's brightness picks one from this string, so type your own to get a totally different look.">i</span></span>
+            </label>
+            <input type="text" id="input-charramp" value=" .:-=+*#%@" maxlength="48" spellcheck="false" />
+            <div class="hint">Ordered darkest → brightest. Min 2 characters.</div>
+        </div>
+
+        <div class="input-group">
+            <label>
+                <span class="label-text">Glyph Aspect Fix<span class="info-icon" data-tip="Fixes the classic stretched-ASCII problem by matching cell shape to a real monospace character (~0.55 for Courier).">i</span></span>
+                <span class="val" id="val-fontaspect">0.55</span>
+            </label>
+            <input type="range" id="slider-fontaspect" min="0.3" max="1.0" step="0.01" value="0.55" />
+        </div>
+
+        <div class="input-group">
+            <label>
+                <span class="label-text">Crisp Glyph Edges<span class="info-icon" data-tip="Sharpens glyph edges when you're zoomed in, instead of the soft/blocky default. Not a real SDF, but close enough at normal zoom.">i</span></span>
+                <input type="checkbox" id="toggle-crisp" />
+            </label>
+        </div>
+
+        <details class="feature-group" open>
+            <summary>Directional Edge & Dither</summary>
+            <div class="fg-body">
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Directional Edge Mode<span class="info-icon" data-tip="Runs edge detection on the source and swaps in - | / \ characters that follow the actual edges, instead of flat shading.">i</span></span>
+                        <input type="checkbox" id="toggle-edge" />
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Continuous Rotation<span class="info-icon" data-tip="Rotates one stroke glyph to match the exact edge angle instead of snapping to 4 fixed directions. Needs Directional Edge Mode on.">i</span></span>
+                        <input type="checkbox" id="toggle-edge-continuous" />
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Edge Strength<span class="info-icon" data-tip="How sensitive edge detection is. Turn it up to catch faint edges, down to keep it to strong, clean lines only.">i</span></span>
+                        <span class="val" id="val-edgestrength">1.0</span>
+                    </label>
+                    <input type="range" id="slider-edgestrength" min="0.1" max="3" step="0.1" value="1.0" />
+                </div>
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Ordered Dithering<span class="info-icon" data-tip="Applies a 4×4 Bayer pattern before quantizing, which fakes extra tonal steps and breaks up hard banding without blurring anything.">i</span></span>
+                        <input type="checkbox" id="toggle-dither" checked />
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Chromatic Aberration<span class="info-icon" data-tip="Splits the red/blue channels apart slightly before quantizing, for a lens-fringe look that gets worse toward the edges.">i</span></span>
+                        <span class="val" id="val-chroma">0.0</span>
+                    </label>
+                    <input type="range" id="slider-chroma" min="0" max="0.03" step="0.001" value="0.0" />
+                </div>
+            </div>
+        </details>
+
+        <details class="feature-group">
+            <summary>Depth & Layering</summary>
+            <div class="fg-body">
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Depth Extrusion<span class="info-icon" data-tip="Draws a darker glyph offset behind the main one, following the local gradient. Cheap fake depth, no actual geometry involved.">i</span></span>
+                        <input type="checkbox" id="toggle-depth" />
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Depth Strength<span class="info-icon" data-tip="How far the shadow glyph shifts away from the main one in Depth Extrusion.">i</span></span>
+                        <span class="val" id="val-depthstrength">1.0</span>
+                    </label>
+                    <input type="range" id="slider-depthstrength" min="0" max="3" step="0.1" value="1.0" />
+                </div>
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Layered Hatching<span class="info-icon" data-tip="Adds a diagonal hatch pattern into dark cells, like ink cross-hatching, instead of leaving shadows flat.">i</span></span>
+                        <input type="checkbox" id="toggle-multilayer" />
+                    </label>
+                </div>
+            </div>
+        </details>
+
+        <details class="feature-group">
+            <summary>Palette & Style</summary>
+            <div class="fg-body">
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Palette Lock<span class="info-icon" data-tip="Snaps every pixel to the nearest color in a fixed retro palette instead of using evenly spaced color steps.">i</span></span>
+                        <input type="checkbox" id="toggle-palette" />
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label><span class="label-text">Palette</span></label>
+                    <select id="select-palette">
+                        <option value="cga">CGA (4-color)</option>
+                        <option value="gameboy">Game Boy (4-tone green)</option>
+                        <option value="c64">Commodore 64 (8-color)</option>
+                        <option value="mono-amber">Amber Terminal (mono)</option>
+                    </select>
+                </div>
+            </div>
+        </details>
+
+        <details class="feature-group">
+            <summary>Ambient Flow</summary>
+            <div class="fg-body">
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Ambient Flow<span class="info-icon" data-tip="Slowly distorts the grid with noise over time, so even a still image drifts a bit on its own.">i</span></span>
+                        <input type="checkbox" id="toggle-flow" />
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Flow Speed<span class="info-icon" data-tip="How fast that noise field moves.">i</span></span>
+                        <span class="val" id="val-flowspeed">0.3</span>
+                    </label>
+                    <input type="range" id="slider-flowspeed" min="0" max="2" step="0.05" value="0.3" />
+                </div>
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Flow Strength<span class="info-icon" data-tip="How far the grid gets pushed by the noise. Low is organic, high gets glitchy fast.">i</span></span>
+                        <span class="val" id="val-flowstrength">1.0</span>
+                    </label>
+                    <input type="range" id="slider-flowstrength" min="0" max="4" step="0.1" value="1.0" />
+                </div>
+            </div>
+        </details>
+
+        <details class="feature-group">
+            <summary>Temporal Trails</summary>
+            <div class="fg-body">
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Temporal Trails<span class="info-icon" data-tip="Blends each frame with the last one so moving subjects leave a fading trail. You'll need video, webcam, or cursor motion to actually see it.">i</span></span>
+                        <input type="checkbox" id="toggle-temporal" />
+                    </label>
+                </div>
+                <div class="input-group">
+                    <label>
+                        <span class="label-text">Trail Persistence<span class="info-icon" data-tip="How much of the old frame sticks around. Higher means longer, smokier trails.">i</span></span>
+                        <span class="val" id="val-temporalblend">0.85</span>
+                    </label>
+                    <input type="range" id="slider-temporalblend" min="0" max="0.95" step="0.01" value="0.85" />
+                </div>
+            </div>
+        </details>
+
+        <div id="web-features">
+            <details class="feature-group" open>
+                <summary>Web-Only Extensions</summary>
+                <div class="fg-body">
+                    <div class="input-group">
+                        <label>
+                            <span class="label-text">Inward Vignette Fade<span class="info-icon" data-tip="Fades the ASCII grid into the background color near the edges, instead of hard-cropping it.">i</span></span>
+                            <span class="val" id="val-fade">0.0</span>
+                        </label>
+                        <input type="range" id="slider-fade" min="0" max="1" step="0.05" value="0.0" />
+                    </div>
+                    <div class="input-group">
+                        <label>
+                            <span class="label-text">Interactive Cursor Repel<span class="info-icon" data-tip="Pushes the grid away from your cursor or finger in real time, like a ripple effect.">i</span></span>
+                            <input type="checkbox" id="toggle-fluid" />
+                        </label>
+                    </div>
+                    <div class="input-group">
+                        <label>
+                            <span class="label-text">Audio Reactivity (Smart)<span class="info-icon" data-tip="Pulls the bass level out of the playing video (or your mic) and feeds it into brightness, edges, and the vignette fade.">i</span></span>
+                            <input type="checkbox" id="toggle-audio" />
+                        </label>
+                    </div>
+                    <div class="input-group">
+                        <label>
+                            <span class="label-text">Scanline / CRT Flicker<span class="info-icon" data-tip="Adds a moving scanline for that old CRT phosphor-display feel.">i</span></span>
+                            <input type="checkbox" id="toggle-scanlines" />
+                        </label>
+                    </div>
+                </div>
+            </details>
+        </div>
+
+        <details class="feature-group" open>
+            <summary>Presets</summary>
+            <div class="fg-body">
+                <div class="input-group">
+                    <label><span class="label-text">Load Preset</span></label>
+                    <select id="select-preset"></select>
+                </div>
+                <div class="button-row">
+                    <button id="btn-preset-load" class="action-btn small">Load</button>
+                    <button id="btn-preset-save" class="action-btn small">Save As...</button>
+                    <button id="btn-preset-delete" class="action-btn small">Delete</button>
+                </div>
+                <div class="button-row">
+                    <button id="btn-preset-export" class="action-btn small">Export JSON</button>
+                    <label for="input-preset-import" class="action-btn small" style="flex:1; margin-bottom:0;">Import JSON</label>
+                    <input type="file" id="input-preset-import" accept="application/json" />
+                </div>
+            </div>
+        </details>
+
+        <button id="btn-export-unity" class="action-btn" style="margin-top: 25px;">Export Unity HLSL</button>
+        <button id="btn-export-web" class="action-btn" style="margin-top: 25px;">Export WebGL Block</button>
+
+        <details class="how-it-works">
+            <summary>How This Actually Works</summary>
+            <div class="hiw-body">
+                Everything below happens for every pixel, every frame, on the graphics card.
+                <ol>
+                    <li><b>Character sheet:</b> your character ramp gets drawn once into a small image. A second sheet holds <code>- / | \</code> for edges, and a third holds one line shape that can rotate to any angle.</li>
+                    <li><b>Grid mapping:</b> the screen gets divided into cells sized to match your Glyph Aspect value, which is what stops the ASCII art from looking stretched.</li>
+                    <li><b>Brightness → character:</b> each cell's brightness decides which character from your ramp shows up there. (With Palette Lock on, the color instead comes from the nearest match in a fixed palette, but brightness still picks the character.)</li>
+                    <li><b>Edge detection:</b> each cell compares itself to its 8 neighbors to work out which way an edge is pointing, and swaps in a character that follows strong edges.</li>
+                    <li><b>Depth & hatching:</b> optional extras that add a shadow character behind the main one, or a hatched pattern in dark areas, for a bit of fake depth.</li>
+                    <li><b>Dithering:</b> a repeating speckled pattern gets mixed in right before colors get simplified, which smooths out the banding that would otherwise show up.</li>
+                    <li><b>Trails:</b> the finished frame gets blended with the previous one before it's drawn on screen, so movement leaves a fading trail instead of updating instantly.</li>
+                </ol>
+            </div>
+        </details>
+    </div>
+
+    <div class="bg-selector" id="bg-selector">
+        <div class="color-swatch active" data-color="#000000" style="background: #000000;" title="Black"></div>
+        <div class="color-swatch" data-color="#2a2a2a" style="background: #2a2a2a;" title="Grey"></div>
+        <div class="color-swatch" data-color="#e6dbc3" style="background: #e6dbc3;" title="Beige"></div>
+        <div class="color-swatch" data-color="#ffffff" style="background: #ffffff;" title="White"></div>
+        <div class="color-swatch custom-picker-wrap" title="Custom Color">
+            <input type="color" id="custom-bg-input" value="#ff00ff" />
+        </div>
+    </div>
+
+    <div id="modal-overlay"></div>
+    <div id="export-modal">
+        <h2 id="modal-title">Code Export</h2>
+        <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 15px;">
+            <p id="modal-desc" style="color: #aaa; font-size: 0.9rem; margin-top: 0; flex-grow: 1;">
+                Instructions will appear here.
+            </p>
+            <button id="btn-download-atlas" class="action-btn" style="width: auto; padding: 15px 25px;">Download Atlas (.png)</button>
+        </div>
+        <textarea id="unity-code" readonly></textarea>
+        <button id="btn-close-modal" class="action-btn close-modal">Close</button>
+    </div>
+
+    <script>
+        import { initAsciiFilter } from '../scripts/app';
+        initAsciiFilter();
+    </script>
+</body>
+</html>
